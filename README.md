@@ -6,7 +6,6 @@
 ---
 
 ## Descripción
-
 CreditRisk360 es un sistema completo de medición de riesgo 
 crediticio construido sobre datos reales de LendingClub 
 (2007-2018), estructurado como lo haría un equipo de riesgo 
@@ -19,6 +18,7 @@ de pérdidas y el stress testing macroeconómico.
 ---
 
 ## Arquitectura del proyecto
+
 ```
 PD Model → LGD Estimation → Expected Loss → Monte Carlo → Stress Testing
 ```
@@ -28,9 +28,53 @@ PD Model → LGD Estimation → Expected Loss → Monte Carlo → Stress Testing
 | Fase 1 | EDA profesional — análisis de cartera | ✅ Completado |
 | Fase 2 | Modelo PD — Logistic Regression + XGBoost | ✅ Completado |
 | Fase 3 | LGD Foundation IRB + EAD + Expected Loss | ✅ Completado |
-| Fase 4 | Simulación Monte Carlo + VaR 99% | ⏳ Pendiente |
-| Fase 5 | Stress Testing macroeconómico | ⏳ Pendiente |
-| Fase 6 | Informe técnico tipo risk report | ⏳ Pendiente |
+| Fase 4 | Simulación Monte Carlo + VaR 99% + Stress Testing | ✅ Completado |
+| Fase 5 | Informe técnico tipo risk report | ⏳ Pendiente |
+
+---
+
+## Hallazgos principales — Fase 4
+
+Simulación Monte Carlo con Cópula Gaussiana sobre 97.761 préstamos del test set.
+
+### Metodología — IRB Advanced (Basilea III)
+
+Variable latente de default por préstamo:
+
+$$X_i = \sqrt{\rho_g} \cdot Z_g + \sqrt{1 - \rho_g} \cdot \varepsilon_i$$
+
+- $Z_g$: factor sistémico del grade $g$ — correlacionado entre grades vía Cholesky
+- $\varepsilon_i$: shock idiosincrático del préstamo $i$
+- $\rho_g$: correlación de activo calibrada sobre rangos BIS (0.08–0.20, decreciente A→G)
+- Default si $X_i < \Phi^{-1}(PD_i)$
+
+100.000 simulaciones | Matriz de correlación 7×7 (A→G) | Implementación vectorizada numpy en bloques
+
+### Métricas de riesgo de cartera
+
+| Métrica | Valor | % EAD |
+|---------|-------|-------|
+| Expected Loss (EL) | $285.1M | 20.92% |
+| VaR 99% | $357.7M | 26.24% |
+| VaR 99.9% | $390.0M | 28.62% |
+| CVaR/ES 97.5% *(estándar Basilea III)* | $358.4M | 26.29% |
+| CVaR/ES 99% | $372.4M | 27.32% |
+| **Capital Económico** | **$72.6M** | **5.33%** |
+
+### Stress Testing
+
+| Escenario | PD shock | Correlación | VaR 99% | vs Base |
+|-----------|----------|-------------|---------|---------|
+| Base | ×1.0 | base | $359M | — |
+| Adverso | ×1.5 | ×1.3 | $549M | +53% |
+| Severo | ×2.0 | ×1.6 | $713M | +99% |
+
+El incremento no es lineal: subir la PD un 50% sube el VaR un 53%, no un 50%. El exceso proviene del clustering de defaults — en recesión los defaults dejan de ser idiosincrásicos y el factor sistémico domina. Este fenómeno reproduce lo observado en 2008 y es la razón por la que Basilea III exige stress testing explícito sobre correlaciones.
+
+### Notas metodológicas
+- **CVaR vs VaR**: desde FRTB 2016, el CVaR/Expected Shortfall al 97.5% reemplaza al VaR 99% como métrica estándar por ser coherente en el sentido de Artzner y capturar mejor el tail risk.
+- **Correlaciones**: calibradas sobre rangos BIS para retail/corporate (0.03–0.24). Correlación decreciente A→G refleja mayor componente idiosincrático en grados especulativos (Gordy 2003, Vasicek 1987).
+- **Capital Económico** = VaR 99% − EL. Representa el buffer de capital necesario para absorber pérdidas inesperadas con confianza del 99%.
 
 ---
 
@@ -74,7 +118,6 @@ Modelo completo de pérdida esperada sobre 97.761 préstamos (test set 2017-2018
 - **EAD**: `out_prncp` nulo en 92.6% de los casos (préstamos cerrados). EAD reconstruido como `funded_amnt − total_rec_prncp`. CCF implícito = 0.693.
 
 ---
-
 
 ## Hallazgos principales — Fase 2
 
@@ -137,19 +180,20 @@ Análisis sobre 549.566 préstamos reales (2007-2018):
 **LendingClub Loan Data 2007-2018**  
 Fuente: [Kaggle — Loan Data](https://www.kaggle.com/datasets/adarshsng/lending-club-loan-data-csv)  
 Tamaño original: 1.55GB — 2.26M préstamos — 151 variables  
-Muestra utilizada: 549.566 préstamos (40% estratificado) — 37 variables seleccionadas. Se realizo la estratificación por limitaciones de infraestructura.
+Muestra utilizada: 549.566 préstamos (40% estratificado) — 37 variables seleccionadas. Se realizó la estratificación por limitaciones de infraestructura.
 
 > El dataset no está incluido en el repositorio por su tamaño.
-> 
 
 ---
 
 ## Stack tecnológico
+
 ```
 Python 3.12+
 pandas · numpy · scikit-learn
 matplotlib · seaborn
 xgboost · shap
+scipy
 pyarrow (parquet)
 jupyter notebook
 ```
@@ -157,6 +201,7 @@ jupyter notebook
 ---
 
 ## Estructura del repositorio
+
 ```
 creditrisk360/
 │
@@ -168,11 +213,11 @@ creditrisk360/
 │   ├── CR360_fase2_4_Shap.ipynb             ✅ Interpretabilidad SHAP
 │   ├── CR360_fase2_5_Scorecard.ipynb        ✅ Scorecard bancaria 300-850
 │   ├── CR360_fase3_1_LGDtarget_EAD.ipynb    ✅ LGD Preprocesamiento
-│   ├── CR360_fase3_2_LGD_model.ipynb        ✅ LGD entrenamiento para prediccion 
-│   ├── CR360_fase3_3_EAD.ipynb              ✅ claculo del EAD 
-│   ├── CR360_fase3_4_EL.ipynb               ✅ claculo del  Expected Loss
-│   ├── 04_MonteCarlo.ipynb                  ⏳ Simulación Monte Carlo
-│   └── 05_StressTesting.ipynb               ⏳ Stress testing
+│   ├── CR360_fase3_2_LGD_model.ipynb        ✅ LGD entrenamiento para predicción
+│   ├── CR360_fase3_3_EAD.ipynb              ✅ Cálculo del EAD
+│   ├── CR360_fase3_4_EL.ipynb               ✅ Cálculo del Expected Loss
+│   ├── CR360_fase4_MonteCarlo.ipynb         ✅ Monte Carlo + VaR 99% + Stress Testing
+│   └── CR360_fase5_RiskReport.ipynb         ⏳ Informe técnico
 │
 ├── data/
 │   ├── creditrisk360_eda.parquet     (generado localmente)
@@ -185,10 +230,11 @@ creditrisk360/
 │   ├── lgd_partial_dataset.parquet   (generado localmente)
 │   ├── lgd_predictions.parquet       (generado localmente)
 │   ├── lgd_table_grade_term.csv      (generado localmente)
-│   ├── lgd_table_grade.csv           (generado localmente) 
-│   ├── lr_proba.npy                  (generado localmente) 
-│   ├── xgb_proba.npy                 (generado localmente) 
-│   └── y_test.npy                    (generado localmente) 
+│   ├── lgd_table_grade.csv           (generado localmente)
+│   ├── lr_proba.npy                  (generado localmente)
+│   ├── xgb_proba.npy                 (generado localmente)
+│   ├── y_test.npy                    (generado localmente)
+│   └── risk_metrics_mc.csv           (generado localmente)
 │
 ├── models/
 │   ├── lr_baseline.pkl
@@ -196,8 +242,11 @@ creditrisk360/
 │   ├── lgd_stage1_classifier.pkl
 │   ├── lgd_stage1_regressor.pkl
 │   └── xgb_creditrisk_calibrated.pkl
-│   
+│
 ├── outputs/
+│   ├── distribucion_perdidas_mc.png
+│   ├── riesgo_por_grade.png
+│   ├── stress_testing.png
 │   ├── 06_lgd_correlaciones.png
 │   ├── 06_lgd_distribucion.png
 │   ├── 06_lgd_por_segmento.png
@@ -222,32 +271,35 @@ creditrisk360/
 │   └── shap_waterfall_low.png
 │
 ├── descripcion_variables.xlsx
-│
-├── README.md
+└── README.md
 ```
 
 ---
 
 ## Cómo ejecutar
+
 ```bash
 # 1. Clonar el repositorio
 git clone https://github.com/Rolando-Stiwan/creditrisk360
 
 # 2. Descargar el dataset
-kaggle datasets download (Ver seccion dataset)
+kaggle datasets download (Ver sección dataset)
 
 # 3. Ejecutar notebooks en orden
 jupyter notebook notebooks/CR360_fase1.ipynb
 jupyter notebook notebooks/CR360_fase2_1_Prep.ipynb
-jupyter notebook notebooks/CR360_fase2_2_model.ipynb 
-jupyter notebook notebooks/CR360_fase2_3_Eval.ipynb 
-jupyter notebook notebooks/CR360_fase2_4_Shap.ipynb 
+jupyter notebook notebooks/CR360_fase2_2_model.ipynb
+jupyter notebook notebooks/CR360_fase2_3_Eval.ipynb
+jupyter notebook notebooks/CR360_fase2_4_Shap.ipynb
 jupyter notebook notebooks/CR360_fase2_5_Scorecard.ipynb
-jupyter notebook notebooks/CR360_fase3_1_LGDtarget_EAD.ipynb    
-jupyter notebook notebooks/CR360_fase3_2_LGD_model.ipynb        
-jupyter notebook notebooks/CR360_fase3_3_EAD.ipynb              
-jupyter notebook notebooks/CR360_fase3_4_EL.ipynb        
+jupyter notebook notebooks/CR360_fase3_1_LGDtarget_EAD.ipynb
+jupyter notebook notebooks/CR360_fase3_2_LGD_model.ipynb
+jupyter notebook notebooks/CR360_fase3_3_EAD.ipynb
+jupyter notebook notebooks/CR360_fase3_4_EL.ipynb
+jupyter notebook notebooks/CR360_fase4_MonteCarlo.ipynb
 ```
+
+> Nota: el notebook de Monte Carlo requiere mínimo 4 GB de RAM disponibles. Con 8 GB usar `BLOCK_SIZE = 500`.
 
 ---
 
@@ -266,5 +318,5 @@ con desarrollo práctico en modelización estadística y Python.
 
 ---
 
-*Proyecto en construcción  
+*Proyecto en construcción*  
 *Contacto: [LinkedIn](https://www.linkedin.com/in/rolando-stiwan-rodriguez/)*
